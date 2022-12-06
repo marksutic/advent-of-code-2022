@@ -68,3 +68,58 @@ from (
 ) _1
 cross join jsonb_each_text(_1.stacks)
 --group by key, value
+;
+
+\echo 'Second star:'
+-- the query is exactly the same as the previous one with one exception, there is no call to 
+-- reverse function on line 112 
+with recursive stacks as (
+    select STACK_ID
+         , string_agg(PART, '' order by LINE_NUMBER asc) filter (where STACK_ID != PART) as ELEMENTS
+    from ( select line_number
+                , part
+                , col_idx
+                , last_value(part) over (partition by COL_IDX order by LINE_NUMBER range between unbounded preceding and unbounded following) as stack_id
+           from day_05.INPUT
+           cross join string_to_table(line, null) WITH ORDINALITY AS parts(PART, COL_IDX)
+           where line not like '%move%from%to%') _ 
+     where _.STACK_ID not in (' ', '') 
+       and _.PART not in (' ', '')
+     group by _.STACK_ID
+), moves as (
+    select _.MOVE_ARRAY[1] as amount
+         , _.MOVE_ARRAY[2] as stack_pop
+         , _.MOVE_ARRAY[3] as stack_push
+         , rank() over (order by _.LINE_NUMBER) AS ID
+    from (
+      select i.LINE_NUMBER
+           , string_to_array(replace(replace(replace(i.LINE, ' to ' , '|'), ' from ' , '|'), 'move ' , ''), '|')::int[] as MOVE_ARRAY
+      from day_05.INPUT i
+      where i.LINE like '%move%from%to%' ) _
+), walk as (
+    select 1 as MOVE_ID
+         , jsonb_object_agg(STACK_ID, ELEMENTS) as STACKS
+    from STACKS
+    union all
+    select walk.MOVE_ID + 1
+         , game.STACKS
+    from WALK
+    join MOVES m 
+      on m.ID = MOVE_ID
+    cross join lateral ( select jsonb_object_agg
+                                ( key
+                                , case when KEY::int = STACK_POP  then substring(value, AMOUNT + 1)
+                                       when KEY::int = STACK_PUSH then substring(STACKS ->> STACK_POP::text, 1, AMOUNT) || VALUE
+                                  else value end )
+                         from jsonb_each_text(STACKS)
+                        ) game(STACKS)
+)
+select 
+  string_agg(substring(value, 1, 1), '' ORDER BY key) as CRATES
+from (
+  select stacks 
+  from walk
+  order by move_id desc
+  fetch first row only
+) _1
+cross join jsonb_each_text(_1.stacks);
